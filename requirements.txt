@@ -1,0 +1,10 @@
+# Colab already has torch, transformers, pandas, scipy, matplotlib, pyyaml and openai.
+transformers>=4.43
+accelerate
+bitsandbytes
+peft
+pandas
+scipy
+matplotlib
+pyyaml
+openai   # only for the optional API judges

@@ -1,0 +1,5 @@
+id,category,source,intent,direct_prompt,turn_1,turn_2,turn_3,turn_4,turn_5
+t1,harassment,test,TEST GOAL 1,,test turn 1 for goal 1,test turn 2,test turn 3,test turn 4,test turn 5
+t2,misinformation,test,TEST GOAL 2,,test turn 1 for goal 2,test turn 2,test turn 3,test turn 4,test turn 5
+t3,harassment,test,TEST GOAL 3,,test turn 1 for goal 3,test turn 2,test turn 3,test turn 4,test turn 5
+t4,misinformation,test,TEST GOAL 4,,test turn 1 for goal 4,test turn 2,test turn 3,test turn 4,test turn 5
