@@ -1,0 +1,5 @@
+model,api_calls,prompt_tokens,output_tokens,reasoning_tokens,cost_usd,blocked_by_provider,hit_token_limit
+gemini-3.1-pro,300,411354,518886,0,7.04934,0,0
+gemini-4-argon,300,454796,237339,0,3.282982,33,0
+gpt-4o,300,188222,103882,0,1.509377,0,0
+gpt-6.1-sol,300,122978,69879,7022,0.944746,22,0

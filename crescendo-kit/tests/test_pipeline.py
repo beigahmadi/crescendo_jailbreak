@@ -30,12 +30,17 @@ def test_stats():
 
 
 def test_template_is_rejected():
-    try:
-        load_harmful(str(ROOT / "data/scenarios_harmful.csv"))
-    except ValueError as e:
-        assert "placeholders" in str(e)
-    else:
-        raise AssertionError("template scenarios should not validate")
+    # uses its own template copy, so it still works after you replace data/scenarios_harmful.csv
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "template.csv"
+        f.write_text("id,category,source,intent,direct_prompt,turn_1,turn_2,turn_3,turn_4,turn_5\n"
+                     "h01,TODO category,TODO,<approved intent 1: TODO>,,TODO,TODO,TODO,TODO,TODO\n")
+        try:
+            load_harmful(str(f))
+        except ValueError as e:
+            assert "placeholders" in str(e)
+        else:
+            raise AssertionError("template scenarios should not validate")
 
 
 def _fill_labels(cfg, rng):
@@ -133,12 +138,18 @@ class _FakeClient:
             err = Exception("Error code: 400 - Invalid prompt: flagged as potentially violating our usage policy")
             err.status_code, err.code = 400, "invalid_prompt"
             raise err
+        if self.mode == "flagged":
+            err = Exception("Error code: 400 - This content was flagged for possible cybersecurity risk.")
+            err.status_code, err.code = 400, None
+            raise err
         if self.mode == "badparam":
             err = Exception("Error code: 400 - Unsupported parameter: 'max_completion_tokens'")
             err.status_code, err.code = 400, "unsupported_parameter"
             raise err
         usage = _Obj(prompt_tokens=100, completion_tokens=900, total_tokens=1000,
                      completion_tokens_details=_Obj(reasoning_tokens=800))
+        if self.mode == "nomessage":
+            return _Obj(choices=[_Obj(message=None, finish_reason=None)], usage=usage)
         if self.mode == "filtered":
             msg, fin = _Obj(content=None, refusal=None), "content_filter"
         elif self.mode == "refusal":
@@ -165,6 +176,10 @@ def test_api_backend():
         [{"role": "user", "content": "q"}], 1)["text"] == "I can't help with that."
     f = APIChatModel("x", "gemini", "m", client=_FakeClient("filtered")).chat([{"role": "user", "content": "q"}], 1)
     assert f["blocked"] and f["text"] == ""
+    assert APIChatModel("x", "openai", "m", client=_FakeClient("flagged")).chat(
+        [{"role": "user", "content": "q"}], 1)["blocked"]
+    nm = APIChatModel("x", "gemini", "m", client=_FakeClient("nomessage")).chat([{"role": "user", "content": "q"}], 1)
+    assert nm["blocked"] and nm["text"] == "" and nm["finish_reason"] == "blocked_by_api"
     b = APIChatModel("x", "openai", "m", client=_FakeClient("blocked"))
     assert b.chat([{"role": "user", "content": "q"}], 1)["blocked"]
     try:

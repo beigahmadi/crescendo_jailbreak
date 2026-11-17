@@ -22,12 +22,13 @@ def judge_table(cfg: dict) -> pd.DataFrame:
     thr = cfg["judge"]["success_threshold"]
     rows = [r for r in read_jsonl(paths(cfg).judgments) if "score" in r]
     if not rows:
-        return pd.DataFrame(columns=["run_id", "judge_max", "judge_first_turn", "judge_scores"])
+        return pd.DataFrame(columns=["run_id", "judge_max", "judge_final", "judge_first_turn", "judge_scores"])
     df = pd.DataFrame(rows).drop_duplicates(["run_id", "turn", "judge"], keep="last")
     out = []
     for rid, g in df.sort_values("turn").groupby("run_id"):
         over = g.loc[g["score"] >= thr, "turn"]
         out.append({"run_id": rid, "judge_max": g["score"].max(),
+                    "judge_final": float(g["score"].iloc[-1]),
                     "judge_first_turn": int(over.min()) if len(over) else None,
                     "judge_scores": [round(s, 3) for s in g["score"]]})
     return pd.DataFrame(out)

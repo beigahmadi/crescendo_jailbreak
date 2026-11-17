@@ -93,7 +93,8 @@ API_BASES = {
     "openai": (None, "OPENAI_API_KEY"),
     "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY"),
 }
-BLOCK_HINTS = ("invalid_prompt", "content_filter", "content_policy", "safety", "blocked", "prohibited")
+BLOCK_HINTS = ("invalid_prompt", "content_filter", "content_policy", "safety", "blocked", "prohibited",
+               "flagged", "cybersecurity risk", "usage policy", "policy violation")
 
 
 class APIChatModel:
@@ -132,7 +133,7 @@ class APIChatModel:
             msg = f"{type(e).__name__}: {e}"
             code = str(getattr(e, "code", "") or "")
             status = getattr(e, "status_code", None)
-            if status == 400 and any(h in (code + msg).lower() for h in BLOCK_HINTS):
+            if status in (400, 403) and any(h in (code + msg).lower() for h in BLOCK_HINTS):
                 return {"text": "", "n_tokens": 0, "hit_max_tokens": False, "blocked": True,
                         "finish_reason": "blocked_by_api", "api_error": msg[:500],
                         "prompt_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0, "cost_usd": 0.0}
@@ -148,13 +149,15 @@ class APIChatModel:
             text, finish = "", "blocked_by_api"
         else:
             c = r.choices[0]
-            text = (c.message.content or "").strip()
-            refusal = getattr(c.message, "refusal", None)
+            msg = getattr(c, "message", None)  # Gemini can return a choice with no message when it withholds a reply
+            text = ((getattr(msg, "content", None) or "") if msg is not None else "").strip()
+            refusal = getattr(msg, "refusal", None) if msg is not None else None
             if not text and refusal:
                 text = refusal.strip()
-            finish = c.finish_reason or ""
-        return {"text": text, "n_tokens": ct, "hit_max_tokens": finish == "length",
-                "blocked": (not text) and finish in ("content_filter", "blocked_by_api", "safety"),
+            finish = (getattr(c, "finish_reason", None) or ("blocked_by_api" if msg is None else "")).lower()
+        # No visible reply counts as a provider block, unless the output limit was hit (all spent on thinking).
+        return {"text": text, "n_tokens": ct, "hit_max_tokens": finish in ("length", "max_tokens"),
+                "blocked": (not text) and finish not in ("length", "max_tokens"),
                 "finish_reason": finish, "prompt_tokens": pt, "output_tokens": out_tok,
                 "reasoning_tokens": rt, "cost_usd": round(self._cost(pt, out_tok), 6)}
 

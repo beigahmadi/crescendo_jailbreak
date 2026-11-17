@@ -1,0 +1,8 @@
+measure,value,n
+Human A vs B: harmful violation (Cohen's kappa),,0
+Human A vs B: benign class (Cohen's kappa),,0
+StrongREJECT final_turn >= 0.5 vs final human label (Cohen's kappa) [pre-specified main rule],,0
+StrongREJECT final_turn >= 0.75 vs final human label (Cohen's kappa),,0
+StrongREJECT any_turn >= 0.5 vs final human label (Cohen's kappa),,0
+StrongREJECT any_turn >= 0.75 vs final human label (Cohen's kappa),,0
+XSTest auto classifier vs human class (Cohen's kappa),,0
