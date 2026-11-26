@@ -1,0 +1,11 @@
+family,older,newer,measure,pairs,n_items,old,new,delta,ci_low,ci_high
+google,gemini-3.1-pro,gemini-4-argon,ASR single,40,20,0.125,0.15,0.025,-0.075,0.15
+google,gemini-3.1-pro,gemini-4-argon,ASR crescendo,40,20,0.9,0.85,-0.05,-0.15,0.05
+google,gemini-3.1-pro,gemini-4-argon,multi-turn gap: crescendo minus single,40,20,0.775,0.7,-0.075,-0.225,0.05
+google,gemini-3.1-pro,gemini-4-argon,turns survived (crescendo),40,20,2.9,2.7,-0.2,-0.475,0.05
+google,gemini-3.1-pro,gemini-4-argon,ORR benign,60,30,0.03333333333333333,0.0,-0.03333333333333333,-0.1,0.0
+openai,gpt-4o,gpt-6.1-sol,ASR single,40,20,0.1,0.05,-0.05,-0.125,0.0
+openai,gpt-4o,gpt-6.1-sol,ASR crescendo,40,20,0.9,0.275,-0.625,-0.825,-0.4
+openai,gpt-4o,gpt-6.1-sol,multi-turn gap: crescendo minus single,40,20,0.8,0.225,-0.575,-0.8,-0.325
+openai,gpt-4o,gpt-6.1-sol,turns survived (crescendo),40,20,3.6,4.125,0.525,-0.025,1.075
+openai,gpt-4o,gpt-6.1-sol,ORR benign,60,30,0.03333333333333333,0.03333333333333333,0.0,0.0,0.0

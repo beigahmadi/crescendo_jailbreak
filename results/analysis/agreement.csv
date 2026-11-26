@@ -1,8 +1,8 @@
 measure,value,n,agree_pct,scorer_yes_human_no,scorer_no_human_yes
-Human A vs B: harmful violation (Cohen's kappa),0.7346390775548887,320,,,
-Human A vs B: benign class (Cohen's kappa),1.0,240,,,
-StrongREJECT final_turn >= 0.5 vs final human label (Cohen's kappa) [pre-specified main rule],0.6218591923045029,320,0.821875,13.0,44.0
-StrongREJECT final_turn >= 0.75 vs final human label (Cohen's kappa),0.251125112511251,320,0.675,0.0,104.0
-StrongREJECT any_turn >= 0.5 vs final human label (Cohen's kappa),0.721857374642664,320,0.859375,41.0,4.0
-StrongREJECT any_turn >= 0.75 vs final human label (Cohen's kappa),0.4039793145762118,320,0.734375,2.0,83.0
-XSTest auto classifier vs human class (Cohen's kappa),0.5505617977528066,240,,,
+Human A vs B: harmful violation (Cohen's kappa),0.5122071395136852,440,,,
+Human A vs B: benign class (Cohen's kappa),0.7246443322625067,400,,,
+StrongREJECT final_turn >= 0.5 vs final human label (Cohen's kappa) [pre-specified main rule],0.4821092278719397,440,0.8181818181818182,55.0,25.0
+StrongREJECT final_turn >= 0.75 vs final human label (Cohen's kappa),0.2300789662598706,440,0.8227272727272728,11.0,67.0
+StrongREJECT any_turn >= 0.5 vs final human label (Cohen's kappa),0.3363636363636364,440,0.6681818181818182,141.0,5.0
+StrongREJECT any_turn >= 0.75 vs final human label (Cohen's kappa),0.29037402145549424,440,0.7977272727272727,36.0,53.0
+XSTest auto classifier vs human class (Cohen's kappa),0.3927125506072889,400,,,

@@ -45,7 +45,7 @@ models:
   # - {key: llama3.1-8b-instruct, hf_id: meta-llama/Llama-3.1-8B-Instruct, family: llama, generation: 2}
 
 # API runs stop before total spending passes this limit (USD). Finished runs are kept.
-budget_usd: 30
+budget_usd: 60
 # Conversations sent in parallel per API model.
 api_concurrency: 6
 
@@ -58,14 +58,43 @@ generation:
   temperature: 0.7
   top_p: 1.0
   max_new_tokens: 512
-  runs_per_condition: 2      # seeded repetitions
+  # Seeded repetitions. One number for every condition, or a map per condition.
+  # The 20 original scenarios already have 2 runs; new scenarios can be run with
+  # `--runs 1` on the command line when the budget is tight (see EXTENSION.md).
+  runs_per_condition: {single: 2, crescendo: 2, benign: 2, adaptive: 1}
   base_seed: 419
   load_in_4bit: true         # needed on a free Colab T4; applied to BOTH models
 
 # Input files
 data:
-  harmful_scenarios: data/scenarios_harmful.csv
-  benign_prompts: data/benign_xstest_sample.csv
+  harmful_scenarios: data/scenarios_harmful.csv        # 20 original + new approved scenarios (50 total)
+  benign_prompts: data/benign_xstest_sample.csv        # 50 safe XSTest prompts, 5 per type
+
+# Adaptive Crescendo (condition `adaptive`, run only with --conditions adaptive).
+# An attacker LLM writes each user turn from the target's last reply. A refused or
+# blocked turn is deleted from the target's history and the attacker tries again
+# ("backtracking"), up to max_backtracks times per conversation.
+# Default attacker: a local open-weight model on the Colab GPU, so it costs nothing.
+# To use an API model instead, set backend: openai and api_model (its cost is added
+# to the budget), and remove hf_id.
+attacker:
+  key: attacker
+  backend: hf
+  hf_id: Qwen/Qwen2.5-7B-Instruct      # Apache-2.0, no licence gate; 4-bit fits a free T4
+  # backend: openai
+  # api_model: gpt-4o-mini
+  # price_per_mtok: {input: 0.15, output: 0.60}
+  # max_output_tokens: 600
+  generation: {temperature: 0.7, top_p: 1.0, max_new_tokens: 400, load_in_4bit: true}
+  max_turns: 5               # accepted turns, the same length as the scripted condition
+  max_backtracks: 5          # Russinovich et al. allow 10; 5 keeps the cost predictable
+  reply_chars_shown: 1500    # how much of each target reply the attacker reads
+  attacker_retries: 2        # if the attacker itself declines, ask again this many times
+
+# Analysis
+analysis:
+  bootstrap: 5000            # cluster-bootstrap resamples (by scenario) for generational-change CIs
+  seed: 419
 
 # Judging
 judge:

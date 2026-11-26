@@ -66,6 +66,43 @@ def load_harmful(path: str) -> list[HarmfulScenario]:
     return out
 
 
+def draft_scripts(cfg: dict, in_path: str, out_path: str | None = None, mock: bool = False, log=print) -> str:
+    """Draft fixed Crescendo scripts with the attacker LLM for rows whose turns are empty.
+
+    The output keeps every column and adds `review_status` = "TODO: review", so
+    `load_harmful` refuses the file until a person has read each script, edited it if
+    needed, checked it against the approved scope, and changed the status to "approved".
+    Rows that already have turns are copied unchanged.
+    """
+    from .attacker import Attacker
+
+    df = pd.read_csv(in_path, dtype=str, keep_default_na=False)
+    for i in range(1, MAX_TURNS + 1):
+        if f"turn_{i}" not in df.columns:
+            df[f"turn_{i}"] = ""
+    if "review_status" not in df.columns:
+        df["review_status"] = "approved"
+    n_turns = int(cfg.get("attacker", {}).get("max_turns", MAX_TURNS))
+    todo = df.index[df["turn_1"].str.strip() == ""]
+    attacker = Attacker(cfg, mock=mock)
+    try:
+        for k, i in enumerate(todo):
+            turns, _ = attacker.draft_script(df.at[i, "intent"], min(n_turns, MAX_TURNS), seed=419 + k)
+            if len(turns) < 2:
+                df.at[i, "review_status"] = "TODO: attacker declined; write this script by hand"
+                continue
+            for j, t in enumerate(turns, start=1):
+                df.at[i, f"turn_{j}"] = t
+            df.at[i, "review_status"] = "TODO: review"
+            log(f"  drafted {df.at[i, 'id']}")
+    finally:
+        attacker.unload()
+    out = out_path or str(in_path).replace(".csv", "_drafted.csv")
+    df.to_csv(out, index=False)
+    log(f"{len(todo)} scripts drafted -> {out}. Review every row, then set review_status to 'approved'.")
+    return out
+
+
 def load_benign(path: str) -> list[BenignPrompt]:
     df = pd.read_csv(path, dtype=str, keep_default_na=False)
     return [BenignPrompt(id=str(r["id"]), type=r["type"], prompt=r["prompt"]) for _, r in df.iterrows()]

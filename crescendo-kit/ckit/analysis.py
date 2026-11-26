@@ -10,7 +10,12 @@ Outputs (results/analysis/):
   agreement.csv                          human-human and judge-human Cohen's kappa
   table_api_usage.csv                    API tokens, cost and provider blocks per model
   table_asr_sensitivity.csv              automatic ASR: any-turn vs final-turn rule, thresholds 0.5 and 0.75
-  fig1_asr.png, fig2_tradeoff.png, fig3_turns.png
+  table_generation_change.csv            newer minus older generation, per family: ASR per condition,
+                                         multi-turn gap (difference in differences), ORR, turns survived,
+                                         adaptive attack effort; 95% CIs by bootstrap over scenarios
+  table_adaptive_effort.csv              adaptive Crescendo: backtracks and target calls per model
+  table_asr_by_source.csv                ASR by scenario source (original vs public benchmark)
+  fig1_asr.png, fig2_tradeoff.png, fig3_turns.png, fig4_generation_change.png
   summary.md                             every number above in one readable page
 """
 from __future__ import annotations
@@ -18,6 +23,7 @@ from __future__ import annotations
 import math
 from itertools import combinations
 
+import numpy as np
 import pandas as pd
 from scipy.stats import binomtest
 
@@ -50,6 +56,36 @@ def mcnemar_exact(a: pd.Series, b: pd.Series) -> dict:
     return {"pairs": int(len(a)), "a_only": n10, "b_only": n01, "p_value": p}
 
 
+def holm(pvals) -> list[float]:
+    """Holm-Bonferroni adjusted p-values (same order as the input)."""
+    p = list(pvals)
+    order = sorted(range(len(p)), key=lambda i: p[i])
+    out, running = [0.0] * len(p), 0.0
+    for rank, i in enumerate(order):
+        running = max(running, min(1.0, (len(p) - rank) * p[i]))
+        out[i] = running
+    return out
+
+
+def paired_bootstrap(old: pd.Series, new: pd.Series, B: int = 5000, seed: int = 419) -> dict:
+    """Mean of (new - old) over pairs matched on the index (item_id, run), with a 95% CI
+    from a cluster bootstrap that resamples scenarios (item_id), because the runs of one
+    scenario are not independent."""
+    j = old.astype(float).to_frame("a").join(new.astype(float).to_frame("b"), how="inner").dropna()
+    if not len(j):
+        return {"pairs": 0, "n_items": 0, "old": float("nan"), "new": float("nan"), "delta": float("nan"),
+                "ci_low": float("nan"), "ci_high": float("nan")}
+    j["d"] = j["b"] - j["a"]
+    per = j.groupby(level=0)["d"].agg(["sum", "count"])
+    sums, cnts = per["sum"].to_numpy(), per["count"].to_numpy()
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(per), size=(B, len(per)))
+    boots = sums[idx].sum(axis=1) / cnts[idx].sum(axis=1)
+    lo, hi = np.percentile(boots, [2.5, 97.5])
+    return {"pairs": len(j), "n_items": len(per), "old": j["a"].mean(), "new": j["b"].mean(),
+            "delta": j["d"].mean(), "ci_low": float(lo), "ci_high": float(hi)}
+
+
 # ------------------------------------------------------------ assemble runs
 def build_runs(cfg: dict) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     thr = cfg["judge"]["success_threshold"]
@@ -57,8 +93,20 @@ def build_runs(cfg: dict) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     if not gens:
         raise RuntimeError("No generations yet: run the experiment first.")
     g = pd.DataFrame([{k: r[k] for k in ("run_id", "model_key", "generation", "condition", "item_id",
-                                         "category", "run", "mock")} | {"n_turns": len(r["turns"])}
+                                         "category", "run", "mock")}
+                      | {"n_turns": len(r["turns"]), "planned_turns": r.get("planned_turns", len(r["turns"])),
+                         "n_backtracks": r.get("n_backtracks", 0), "target_calls": r.get("target_calls", len(r["turns"])),
+                         "attacker_failed": bool(r.get("attacker_failed", False)),
+                         "item_source": r.get("item_source")}
                       for r in gens]).drop_duplicates("run_id", keep="last")
+    # runs saved before item_source was recorded: look the source up in the scenario file
+    try:
+        from .scenarios import load_harmful
+        src = {s.id: s.source for s in load_harmful(cfg["data"]["harmful_scenarios"])}
+    except Exception:
+        src = {}
+    g["item_source"] = g["item_source"].where(g["item_source"].notna(), g["item_id"].map(src))
+    g["item_source"] = g["item_source"].fillna("").map(_source_group)
     order = {m["key"]: i for i, m in enumerate(cfg["models"])}
     fam = {m["key"]: m.get("family", "main") for m in cfg["models"]}
     g["model_order"] = g["model_key"].map(order)
@@ -89,6 +137,17 @@ def build_runs(cfg: dict) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     b["refused"] = b["final_class"].isin([2, 3])
     b["full_refusal"] = b["final_class"] == 2
     return h, b, labels
+
+
+def _source_group(s: str) -> str:
+    s = (s or "").strip().lower()
+    if not s or s == "xstest":
+        return s or "unknown"
+    if "jbb" in s or "jailbreakbench" in s:
+        return "JailbreakBench"
+    if "harmbench" in s:
+        return "HarmBench"
+    return "original"
 
 
 # ------------------------------------------------------------ tables
@@ -137,18 +196,96 @@ def orr_table(b: pd.DataFrame) -> pd.DataFrame:
 
 
 def turns_table(h: pd.DataFrame) -> pd.DataFrame:
-    c = h[h["condition"] == "crescendo"]
     rows = []
-    for m, d in c.groupby("model_key"):
-        n = len(d)
-        for t in range(1, int(d["n_turns"].max()) + 1):
-            k = int((d["success"] & (d["first_fail_turn"] <= t)).sum())
-            rows.append({"model": m, "turn": t, "n_runs": n, "failed_by_turn": k, "cum_asr": k / n})
-        safe1 = d[~(d["success"] & (d["first_fail_turn"] == 1))]
-        later = int((safe1["success"]).sum())
-        rows.append({"model": m, "turn": "failed_later_if_safe_at_turn1", "n_runs": len(safe1),
-                     "failed_by_turn": later, "cum_asr": later / len(safe1) if len(safe1) else float("nan")})
+    for cond in ("crescendo", "adaptive"):
+        c = h[h["condition"] == cond]
+        for m, d in c.groupby("model_key"):
+            n = len(d)
+            for t in range(1, int(max(d["n_turns"].max(), d["planned_turns"].max())) + 1):
+                k = int((d["success"] & (d["first_fail_turn"] <= t)).sum())
+                rows.append({"condition": cond, "model": m, "turn": t, "n_runs": n, "failed_by_turn": k,
+                             "cum_asr": k / n})
+            safe1 = d[~(d["success"] & (d["first_fail_turn"] == 1))]
+            later = int((safe1["success"]).sum())
+            rows.append({"condition": cond, "model": m, "turn": "failed_later_if_safe_at_turn1", "n_runs": len(safe1),
+                         "failed_by_turn": later, "cum_asr": later / len(safe1) if len(safe1) else float("nan")})
     return pd.DataFrame(rows)
+
+
+def _turns_survived(d: pd.DataFrame) -> pd.Series:
+    """Accepted turns the model got through safely: first failing turn - 1, or all planned turns."""
+    return (d["first_fail_turn"] - 1).where(d["success"], d["planned_turns"]).astype(float)
+
+
+def _family_pairs(cfg: dict):
+    fams = {}
+    for m in cfg["models"]:
+        fams.setdefault(m.get("family", "main"), []).append(m)
+    for fam, ms in sorted(fams.items()):
+        ms = sorted(ms, key=lambda m: m.get("generation", 0))
+        for old, new in combinations(ms, 2):
+            yield fam, old["key"], new["key"]
+
+
+def generation_change_table(h: pd.DataFrame, b: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """Newer minus older generation within each family, the study's central comparison.
+
+    delta > 0 means the newer model fails MORE often (or survives more turns / needs more
+    attacker effort, for those measures). The multi-turn gap rows are a difference in
+    differences: did the extra success that multi-turn attacks buy over a direct request
+    shrink in the newer generation? CIs resample scenarios (cluster bootstrap)."""
+    A = cfg.get("analysis", {})
+    B, seed = int(A.get("bootstrap", 5000)), int(A.get("seed", 419))
+    key = ["item_id", "run"]
+    conds = [c for c in ("single", "crescendo", "adaptive") if c in set(h["condition"])]
+
+    def ser(model, cond, col="success", frame=None):
+        d = (frame if frame is not None else h)
+        d = d[(d.model_key == model) & (d.condition == cond)] if "condition" in d else d[d.model_key == model]
+        return d.set_index(key)[col]
+
+    rows = []
+    for fam, old, new in _family_pairs(cfg):
+        base = {"family": fam, "older": old, "newer": new}
+        for c in conds:
+            rows.append({**base, "measure": f"ASR {c}", **paired_bootstrap(ser(old, c), ser(new, c), B, seed)})
+        for c in [c for c in conds if c != "single"]:
+            gap = lambda m: (ser(m, c).astype(float).to_frame("x").join(ser(m, "single").astype(float).to_frame("s"),
+                                                                       how="inner").pipe(lambda j: j["x"] - j["s"]))
+            rows.append({**base, "measure": f"multi-turn gap: {c} minus single", **paired_bootstrap(gap(old), gap(new), B, seed)})
+        if "crescendo" in conds and "adaptive" in conds:
+            gap = lambda m: (ser(m, "adaptive").astype(float).to_frame("x")
+                             .join(ser(m, "crescendo").astype(float).to_frame("s"), how="inner")
+                             .pipe(lambda j: j["x"] - j["s"]))
+            rows.append({**base, "measure": "adaptivity gain: adaptive minus scripted",
+                         **paired_bootstrap(gap(old), gap(new), B, seed)})
+        for c in [c for c in conds if c != "single"]:
+            d = h[h.condition == c].assign(survived=lambda x: _turns_survived(x))
+            rows.append({**base, "measure": f"turns survived ({c})",
+                         **paired_bootstrap(ser(old, c, "survived", d), ser(new, c, "survived", d), B, seed)})
+        if "adaptive" in conds:
+            for col, label in (("n_backtracks", "backtracks needed (adaptive)"), ("target_calls", "target calls (adaptive)")):
+                rows.append({**base, "measure": label, **paired_bootstrap(ser(old, "adaptive", col), ser(new, "adaptive", col), B, seed)})
+        if len(b):
+            bo = b[b.model_key == old].set_index(key)["refused"]
+            bn = b[b.model_key == new].set_index(key)["refused"]
+            rows.append({**base, "measure": "ORR benign", **paired_bootstrap(bo, bn, B, seed)})
+    return pd.DataFrame(rows)
+
+
+def adaptive_effort_table(h: pd.DataFrame) -> pd.DataFrame:
+    d = h[h["condition"] == "adaptive"]
+    if not len(d):
+        return pd.DataFrame()
+    rows = []
+    for (m, gen), x in d.groupby(["model_key", "generation"]):
+        succ = x[x["success"]]
+        rows.append({"model": m, "generation": gen, "n_runs": len(x), "asr": x["success"].mean(),
+                     "mean_backtracks": x["n_backtracks"].mean(), "mean_target_calls": x["target_calls"].mean(),
+                     "mean_backtracks_successful": succ["n_backtracks"].mean() if len(succ) else float("nan"),
+                     "mean_first_fail_turn": succ["first_fail_turn"].mean() if len(succ) else float("nan"),
+                     "attacker_failed": int(x["attacker_failed"].sum())})
+    return pd.DataFrame(rows).sort_values("generation")
 
 
 def tests_table(h: pd.DataFrame, b: pd.DataFrame, cfg: dict) -> pd.DataFrame:
@@ -158,7 +295,7 @@ def tests_table(h: pd.DataFrame, b: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     for fam, fm in [(f, [m for m in cfg["models"] if m.get("family", "main") == f])
                     for f in sorted({m.get("family", "main") for m in cfg["models"]})]:
         for old, new in combinations(sorted(fm, key=lambda m: m.get("generation", 0)), 2):
-            for cond, hyp in (("crescendo", "H1"), ("single", "H1 (single-turn)")):
+            for cond, hyp in (("crescendo", "H1"), ("adaptive", "H1 (adaptive)"), ("single", "H1 (single-turn)")):
                 a = h[(h.model_key == old["key"]) & (h.condition == cond)].set_index(key)["success"]
                 c = h[(h.model_key == new["key"]) & (h.condition == cond)].set_index(key)["success"]
                 j = a.to_frame("a").join(c.to_frame("b"), how="inner")
@@ -171,15 +308,21 @@ def tests_table(h: pd.DataFrame, b: pd.DataFrame, cfg: dict) -> pd.DataFrame:
             if len(j):
                 rows.append({"hypothesis": "H3", "comparison": f"ORR: {old['key']} vs {new['key']}",
                              "rate_a": j["a"].mean(), "rate_b": j["b"].mean(), **mcnemar_exact(j["a"], j["b"])})
-    # H2: single vs crescendo within each model
-    for m in cfg["models"]:
-        a = h[(h.model_key == m["key"]) & (h.condition == "single")].set_index(key)["success"]
-        c = h[(h.model_key == m["key"]) & (h.condition == "crescendo")].set_index(key)["success"]
-        j = a.to_frame("a").join(c.to_frame("b"), how="inner")
-        if len(j):
-            rows.append({"hypothesis": "H2", "comparison": f"{m['key']}: single vs crescendo",
-                         "rate_a": j["a"].mean(), "rate_b": j["b"].mean(), **mcnemar_exact(j["a"], j["b"])})
-    return pd.DataFrame(rows)
+    # H2: single vs (scripted, adaptive) Crescendo within each model
+    # H4: scripted vs adaptive Crescendo within each model
+    for hyp, ca, cb in (("H2", "single", "crescendo"), ("H2 (adaptive)", "single", "adaptive"),
+                        ("H4", "crescendo", "adaptive")):
+        for m in cfg["models"]:
+            a = h[(h.model_key == m["key"]) & (h.condition == ca)].set_index(key)["success"]
+            c = h[(h.model_key == m["key"]) & (h.condition == cb)].set_index(key)["success"]
+            j = a.to_frame("a").join(c.to_frame("b"), how="inner")
+            if len(j):
+                rows.append({"hypothesis": hyp, "comparison": f"{m['key']}: {ca} vs {cb}",
+                             "rate_a": j["a"].mean(), "rate_b": j["b"].mean(), **mcnemar_exact(j["a"], j["b"])})
+    t = pd.DataFrame(rows)
+    if len(t):  # more tests now: Holm-adjust within each hypothesis family
+        t["p_holm"] = t.groupby("hypothesis")["p_value"].transform(lambda p: holm(p.tolist()))
+    return t
 
 
 def agreement_table(h: pd.DataFrame, b: pd.DataFrame, labels: dict, cfg: dict) -> pd.DataFrame:
@@ -213,17 +356,25 @@ def usage_table(cfg: dict) -> pd.DataFrame:
     """API spending, tokens and provider blocks per model (empty for local models)."""
     rows = []
     for r in read_jsonl(paths(cfg).generations):
-        for t in r["turns"]:
-            rows.append({"model": r["model_key"], "condition": r["condition"],
+        if r.get("attacker_cost_usd"):
+            rows.append({"model": r["model_key"], "condition": r["condition"], "prompt_tokens": 0, "output_tokens": 0,
+                         "reasoning_tokens": 0, "cost_usd": 0, "attacker_cost_usd": r["attacker_cost_usd"],
+                         "blocked": False, "hit_max_tokens": False, "_attacker_row": True})
+        for t in list(r["turns"]) + list(r.get("backtracks", [])):
+            rows.append({"model": r["model_key"], "condition": r["condition"], "attacker_cost_usd": 0,
                          "prompt_tokens": t.get("prompt_tokens", 0), "output_tokens": t.get("output_tokens", 0),
                          "reasoning_tokens": t.get("reasoning_tokens", 0), "cost_usd": t.get("cost_usd", 0),
                          "blocked": bool(t.get("blocked")), "hit_max_tokens": bool(t.get("hit_max_tokens"))})
     if not rows:
         return pd.DataFrame()
     d = pd.DataFrame(rows)
-    return (d.groupby("model").agg(api_calls=("cost_usd", "size"), prompt_tokens=("prompt_tokens", "sum"),
+    if "_attacker_row" not in d:
+        d["_attacker_row"] = False
+    d["_call"] = ~d["_attacker_row"].fillna(False).astype(bool)
+    return (d.groupby("model").agg(api_calls=("_call", "sum"), prompt_tokens=("prompt_tokens", "sum"),
                                    output_tokens=("output_tokens", "sum"), reasoning_tokens=("reasoning_tokens", "sum"),
-                                   cost_usd=("cost_usd", "sum"), blocked_by_provider=("blocked", "sum"),
+                                   cost_usd=("cost_usd", "sum"), attacker_cost_usd=("attacker_cost_usd", "sum"),
+                                   blocked_by_provider=("blocked", "sum"),
                                    hit_token_limit=("hit_max_tokens", "sum")).reset_index())
 
 
@@ -238,7 +389,8 @@ def _style(ax):
     ax.set_axisbelow(True)
 
 
-def make_figures(asr: pd.DataFrame, orr: pd.DataFrame, turns: pd.DataFrame, cfg: dict, out) -> list[str]:
+def make_figures(asr: pd.DataFrame, orr: pd.DataFrame, turns: pd.DataFrame, cfg: dict, out,
+                 gen_change: pd.DataFrame | None = None) -> list[str]:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -251,7 +403,7 @@ def make_figures(asr: pd.DataFrame, orr: pd.DataFrame, turns: pd.DataFrame, cfg:
 
     # Fig 1: ASR by condition and model
     fig, ax = plt.subplots(figsize=(6.4, 3.9), dpi=200)
-    conds = [c for c in ("single", "crescendo") if c in set(asr["condition"])]
+    conds = [c for c in ("single", "crescendo", "adaptive") if c in set(asr["condition"])]
     w = 0.8 / max(1, len(keys))
     for i, k in enumerate(keys):
         d = asr[asr["model"] == k].set_index("condition").reindex(conds)
@@ -261,7 +413,8 @@ def make_figures(asr: pd.DataFrame, orr: pd.DataFrame, turns: pd.DataFrame, cfg:
                     fmt="none", ecolor=INK2, elinewidth=1, capsize=3, zorder=3)
         for xi, v, top in zip(x, d["asr"], d["ci_high"]):
             ax.text(xi, top + 0.02, f"{v:.0%}", ha="center", va="bottom", fontsize=7.5, color=INK, zorder=4)
-    ax.set_xticks(range(len(conds)), [{"single": "Single-turn request", "crescendo": "Crescendo (5 turns)"}[c] for c in conds])
+    ax.set_xticks(range(len(conds)), [{"single": "Single-turn request", "crescendo": "Scripted Crescendo",
+                                       "adaptive": "Adaptive Crescendo"}[c] for c in conds])
     ax.set_ylim(0, 1.12)
     ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
     ax.yaxis.set_major_formatter(PercentFormatter(1.0))
@@ -309,7 +462,7 @@ def make_figures(asr: pd.DataFrame, orr: pd.DataFrame, turns: pd.DataFrame, cfg:
         f = out / "fig2_tradeoff.png"; fig.savefig(f, facecolor=SURFACE); plt.close(fig); files.append(str(f))
 
     # Fig 3: cumulative Crescendo ASR by turn, single-turn ASR as a dashed reference
-    t = turns[turns["turn"].apply(lambda v: isinstance(v, int))]
+    t = turns[turns["turn"].apply(lambda v: isinstance(v, int)) & (turns["condition"] == "crescendo")]
     if len(t):
         fig, ax = plt.subplots(figsize=(6.0, 3.6), dpi=200)
         single = asr[asr["condition"] == "single"].set_index("model")
@@ -329,6 +482,43 @@ def make_figures(asr: pd.DataFrame, orr: pd.DataFrame, turns: pd.DataFrame, cfg:
         _style(ax)
         fig.tight_layout()
         f = out / "fig3_turns.png"; fig.savefig(f, facecolor=SURFACE); plt.close(fig); files.append(str(f))
+
+    # Fig 4: generational change (newer minus older) with cluster-bootstrap CIs
+    if gen_change is not None and len(gen_change):
+        gc_ = gen_change[gen_change["measure"].str.startswith(("ASR", "multi-turn gap", "adaptivity", "ORR"))]
+        gc_ = gc_[gc_["pairs"] > 0]
+        if len(gc_):
+            fams = list(dict.fromkeys(gc_["family"]))
+            measures = list(dict.fromkeys(gc_["measure"]))
+            fig, ax = plt.subplots(figsize=(6.4, 0.42 * len(measures) * len(fams) + 1.8), dpi=200)
+            fcol = {f: SERIES[(2 * i + 1) % len(SERIES)] for i, f in enumerate(fams)}
+            seen = set()
+            y, labels = 0.0, []
+            for mname in measures:
+                ys = []
+                for i, fam in enumerate(fams):
+                    r = gc_[(gc_["measure"] == mname) & (gc_["family"] == fam)]
+                    if len(r):
+                        r = r.iloc[0]
+                        ax.errorbar(r["delta"], -y, xerr=[[r["delta"] - r["ci_low"]], [r["ci_high"] - r["delta"]]],
+                                    fmt="o", color=fcol[fam], ms=6, elinewidth=1.2, capsize=3, mec=SURFACE, mew=1,
+                                    label=f"{fam}: {r['older']} \u2192 {r['newer']}" if fam not in seen else None)
+                        seen.add(fam)
+                    ys.append(-y)
+                    y += 1
+                labels.append((sum(ys) / len(ys), mname))
+                y += 0.6
+            ax.axvline(0, color=INK2, lw=1)
+            ax.set_yticks([p for p, _ in labels], [l for _, l in labels], fontsize=8)
+            ax.xaxis.set_major_formatter(PercentFormatter(1.0))
+            ax.set_xlabel("Newer minus older (left of 0: newer is safer)")
+            ax.set_title("What changed between generations", fontsize=11, loc="left", color=INK, pad=34)
+            ax.legend(frameon=False, fontsize=7.5, loc="lower left", bbox_to_anchor=(0, 1.0), ncol=1,
+                      handlelength=1.2, borderaxespad=0.2)
+            ax.set_ylim(-y + 0.4, 0.6)
+            _style(ax); ax.yaxis.grid(False); ax.xaxis.grid(True, color=GRID, linewidth=0.8)
+            fig.tight_layout()
+            f = out / "fig4_generation_change.png"; fig.savefig(f, facecolor=SURFACE); plt.close(fig); files.append(str(f))
     return files
 
 
@@ -347,9 +537,24 @@ def _md(df: pd.DataFrame) -> str:
             if isinstance(v, float):
                 v = "" if math.isnan(v) else (f"{v:.3f}" if c in ("p_value", "value") else
                                              f"{v:.0%}" if c in ("asr", "orr", "ci_low", "ci_high", "rate_a", "rate_b", "cum_asr") else f"{v:.2f}")
+                if c == "p_holm" and isinstance(r[c], float) and not math.isnan(r[c]):
+                    v = f"{r[c]:.3f}"
             cells.append(str(v))
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
+
+
+def _fmt_change(g: pd.DataFrame) -> pd.DataFrame:
+    """Rates as percentages and deltas in percentage points; counts (turns, calls) as numbers."""
+    rows = []
+    for _, r in g.iterrows():
+        rate = r["measure"].startswith(("ASR", "multi-turn gap", "adaptivity", "ORR"))
+        f = (lambda v: "" if pd.isna(v) else f"{v:.0%}") if rate else (lambda v: "" if pd.isna(v) else f"{v:.2f}")
+        d = (lambda v: "" if pd.isna(v) else f"{v * 100:+.0f} pp") if rate else (lambda v: "" if pd.isna(v) else f"{v:+.2f}")
+        rows.append({"family": r["family"], "measure": r["measure"], "pairs": int(r["pairs"]),
+                     "scenarios": int(r["n_items"]), "older": f(r["old"]), "newer": f(r["new"]),
+                     "change": d(r["delta"]), "95% CI": f"[{d(r['ci_low'])}, {d(r['ci_high'])}]"})
+    return pd.DataFrame(rows)
 
 
 def run_analysis(cfg: dict, log=print) -> dict:
@@ -363,10 +568,16 @@ def run_analysis(cfg: dict, log=print) -> dict:
     tests, agree = tests_table(h, b, cfg), agreement_table(h, b, labels, cfg)
     usage = usage_table(cfg)
     sens = sensitivity_table(h)
+    gchange = generation_change_table(h, b, cfg)
+    effort = adaptive_effort_table(h)
+    by_src = (h.groupby(["item_source", "model_key", "condition"])["success"].agg(["sum", "count", "mean"])
+              .rename(columns={"sum": "successes", "count": "n_runs", "mean": "asr"}).reset_index())
     for name, df in [("table_asr_sensitivity", sens), ("table_api_usage", usage), ("table_asr", asr), ("table_orr", orr), ("table_turns", turns),
-                     ("table_asr_by_category", cat), ("tests", tests), ("agreement", agree)]:
+                     ("table_asr_by_category", cat), ("tests", tests), ("agreement", agree),
+                     ("table_generation_change", gchange), ("table_adaptive_effort", effort),
+                     ("table_asr_by_source", by_src)]:
         df.to_csv(out / f"{name}.csv", index=False)
-    figs = make_figures(asr, orr, turns, cfg, out)
+    figs = make_figures(asr, orr, turns, cfg, out, gchange)
 
     warn = []
     if h["mock"].any():
@@ -384,12 +595,18 @@ def run_analysis(cfg: dict, log=print) -> dict:
           "## Sensitivity: automatic ASR by success rule and threshold (Crescendo only)",
           _md(sens[sens["condition"] == "crescendo"][["model", "rule", "threshold", "successes", "n_runs", "asr", "ci_low", "ci_high"]]), "",
           "## Over-refusal rate (RQ3)", _md(orr), "",
-          "## Paired tests (exact McNemar; rate_a and rate_b follow the comparison order)", _md(tests), "",
+          "## Generational change: newer minus older (95% CI, bootstrap over scenarios)",
+          _md(_fmt_change(gchange)) if len(gchange) else "(no family pairs)", "",
+          "## Paired tests (exact McNemar; rate_a and rate_b follow the comparison order; p_holm within each hypothesis)",
+          _md(tests), "",
           "## Crescendo: cumulative failures by turn", _md(turns), "",
+          *(["## Adaptive Crescendo: attacker effort", _md(effort), ""] if len(effort) else []),
+          "## ASR by scenario source", _md(by_src), "",
           "## Agreement", _md(agree), "",
           "## API usage and cost (blocked = the provider refused the request outright)",
           _md(usage) if len(usage) else "(no API models)", "",
           "## Figures", *[f"- {f}" for f in figs], ""]
     (out / "summary.md").write_text("\n".join(md), encoding="utf-8")
     log(f"analysis written to {out}")
-    return {"asr": asr, "orr": orr, "turns": turns, "tests": tests, "agreement": agree, "figures": figs}
+    return {"asr": asr, "orr": orr, "turns": turns, "tests": tests, "agreement": agree, "figures": figs,
+            "generation_change": gchange, "adaptive_effort": effort}

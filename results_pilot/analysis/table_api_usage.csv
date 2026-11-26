@@ -1,5 +1,5 @@
-model,api_calls,prompt_tokens,output_tokens,reasoning_tokens,cost_usd,blocked_by_provider,hit_token_limit
-gemini-3.1-pro,42,59149,67809,0,0.932006,0,0
-gemini-4-argon,41,69999,30319,0,0.443188,11,0
-gpt-4o,42,28608,13929,0,0.210806,0,0
-gpt-6.1-sol,42,15965,9144,601,0.12337,8,0
+model,api_calls,prompt_tokens,output_tokens,reasoning_tokens,cost_usd,attacker_cost_usd,blocked_by_provider,hit_token_limit
+gemini-3.1-pro,53,80968,86357,0,1.19822,0,0,0
+gemini-4-argon,55,104512,41133,0,0.620354,0,13,0
+gpt-4o,53,36810,18359,0,0.27561599999999997,0,0,0
+gpt-6.1-sol,52,24730,12478,633,0.17424,0,2,0

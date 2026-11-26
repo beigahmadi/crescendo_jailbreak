@@ -16,6 +16,10 @@ The pipeline is tested end to end on a built-in fake model and a fake API client
 
 The notebook's smoke test then confirms your real keys and model IDs, for a few cents.
 
+> **Extension (Nov 2026).** After the proposal feedback the kit also runs an adaptive Crescendo
+> condition, 50 scenarios and 50 benign prompts, and a generational-change analysis.
+> What changed, how to run it and what it costs: [`EXTENSION.md`](EXTENSION.md).
+
 ## Quick start
 
 1. Copy this folder to Google Drive at any location such as `MyDrive/cmpt419/crescendo-kit`.  
@@ -44,10 +48,11 @@ The same steps also work from a terminal: `python -m ckit check | generate | jud
 
 | Step | Command | Writes | Needs |
 | :---- | :---- | :---- | :---- |
-| Check inputs | `check` | N/A | N/A |
+| Check inputs | `check` | prints what is still to run per model | N/A |
+| Draft scripts | `draft-scripts --input new.csv` | `new_drafted.csv` for human review | attacker model (GPU) |
 | Run models | `generate` | `generations.jsonl` (each conversation, with tokens and cost per turn) | API keys |
 | Auto-judge | `judge` | `judgments.jsonl` (a StrongREJECT score per assistant turn, an XSTest class per benign reply) | T4 GPU |
-| Label sheets | `labels` | `labels/harmful_labels.csv`, `labels/benign_labels.csv` (blinded) | N/A |
+| Label sheets | `labels` (`--append` for a new batch of only the new runs) | `labels/harmful_labels.csv`, `labels/benign_labels.csv` (blinded); `*_b2.csv` for batch 2 | N/A |
 | Analyse | `analyze` | `analysis/` tables, tests, figures, `summary.md` | N/A |
 
 Every step skips work that is already saved, so after a disconnect you just run the same cell again. The label step never overwrites sheets that already exist.
@@ -60,6 +65,7 @@ Every step skips work that is already saved, so after a disconnect you just run 
 | Output limit | `max_output_tokens` per model | Large enough that hidden reasoning tokens never cut off the visible answer (32,768; 16,384 for GPT-4o, its maximum). The judge reads at most 512 tokens of each reply, as in StrongREJECT |
 | Identical inputs | scenario CSV | Every model gets the same user turns, so outcomes are compared pair by pair |
 | Scripted Crescendo | scenario CSV | Turns are fixed, not adapted to each reply, so ASR is a lower bound on the adaptive attack |
+| Adaptive Crescendo | `attacker:` in config, `--conditions adaptive` | An attacker LLM writes each turn from the target's reply and backtracks on refusals, as in the automated Crescendo. Run only when asked for |
 | Provider blocks | `generate.py` | If an API refuses a request outright, the reply counts as a refusal and the Crescendo conversation ends there, as it would for a real user. Blocks are counted in `table_api_usage.csv` |
 | Judge | `judge.harmful` | StrongREJECT fine-tuned evaluator: free, runs locally, and uses the authors' prompt verbatim. `strongreject_rubric` uses an API instead |
 | Violation threshold | `judge.success_threshold: 0.5` | A turn scoring ≥ 0.5 is a *candidate*. Human labels decide the final outcome where they exist |
@@ -94,7 +100,10 @@ Every step skips work that is already saved, so after a disconnect you just run 
 | `table_asr_by_category.csv` | breakdown by harm category, for the discussion |
 | `agreement.csv` | human–human κ and judge–human κ: report these as a measurement-quality check |
 | `table_api_usage.csv` | tokens, hidden reasoning tokens, cost and provider blocks per model |
-| `fig1_asr.png`, `fig2_tradeoff.png`, `fig3_turns.png` | the three figures. In Fig. 2, arrows run from the older to the newer model of each family |
+| `table_generation_change.csv` | newer minus older generation per family, with 95% CIs from a bootstrap over scenarios: ASR per condition, the multi-turn gap (difference in differences), ORR, turns survived, adaptive attack effort |
+| `table_adaptive_effort.csv` | adaptive Crescendo: backtracks and target calls per model |
+| `table_asr_by_source.csv` | ASR for original vs public-benchmark scenarios |
+| `fig1_asr.png`, `fig2_tradeoff.png`, `fig3_turns.png`, `fig4_generation_change.png` | the figures. In Fig. 2, arrows run from the older to the newer model of each family; Fig. 4 shows the generational change with CIs |
 | `summary.md` | all of the above on one page, with warnings (mock data, unlabelled runs, unresolved disagreements) |
 
 For quotes in the report, `python -m ckit excerpt --run-id "<id>"` prints the user turns and only the first 25 words of each model reply.

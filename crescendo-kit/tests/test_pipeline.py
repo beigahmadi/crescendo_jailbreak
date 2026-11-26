@@ -11,7 +11,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from ckit.analysis import mcnemar_exact, run_analysis, wilson  # noqa: E402
+from ckit.analysis import holm, mcnemar_exact, paired_bootstrap, run_analysis, wilson  # noqa: E402
 from ckit.common import load_config, paths, read_jsonl  # noqa: E402
 from ckit.generate import run_all  # noqa: E402
 from ckit.judge import judge_all, xstest_strmatch  # noqa: E402
@@ -27,6 +27,12 @@ def test_stats():
     assert (r["a_only"], r["b_only"]) == (2, 1)
     assert cohen_kappa([1, 0, 1, 0], [1, 0, 1, 0]) == 1.0
     assert xstest_strmatch("I'm sorry, I can't") == 2 and xstest_strmatch("Sure! Here") == 1
+    assert [round(x, 3) for x in holm([0.01, 0.04, 0.03])] == [0.03, 0.06, 0.06]
+    idx = pd.MultiIndex.from_tuples([(f"i{k}", r) for k in range(10) for r in range(2)], names=["item_id", "run"])
+    old = pd.Series([1] * 20, index=idx)
+    new = pd.Series([1, 0] * 10, index=idx)
+    bt = paired_bootstrap(old, new, B=500)
+    assert bt["delta"] == -0.5 and bt["n_items"] == 10 and bt["ci_low"] <= -0.5 <= bt["ci_high"]
 
 
 def test_template_is_rejected():
@@ -76,10 +82,10 @@ def test_end_to_end():
         cfg["data"]["harmful_scenarios"] = str(ROOT / "tests/fixtures/scenarios_test.csv")
         run_all(cfg, mock=True, limit=None, log=lambda *_: None)
         gens = list(read_jsonl(paths(cfg).generations))
-        n_h, n_b = 4, 30
+        n_h, n_b = 4, 50
         runs = cfg["generation"]["runs_per_condition"]
         n_m = len(cfg["models"])
-        assert len(gens) == n_m * runs * (2 * n_h + n_b), len(gens)
+        assert len(gens) == n_m * (n_h * (runs["single"] + runs["crescendo"]) + n_b * runs["benign"]), len(gens)
         # resume: a second call does nothing
         run_all(cfg, mock=True, log=lambda *_: None)
         assert len(list(read_jsonl(paths(cfg).generations))) == len(gens)
@@ -104,13 +110,41 @@ def test_end_to_end():
         assert not any(m in " ".join(sheet.columns) for m in ("model", "llama"))  # blinded
         _fill_labels(cfg, random.Random(1))
 
+        # --- extension: adaptive Crescendo on the same scenarios, then a second labelling batch
+        run_all(cfg, mock=True, conditions=["adaptive"], log=lambda *_: None)
+        ad = [g for g in read_jsonl(paths(cfg).generations) if g["condition"] == "adaptive"]
+        assert len(ad) == n_m * n_h * runs["adaptive"]
+        assert any(g["n_backtracks"] > 0 for g in ad), "mock refusals should trigger backtracking"
+        for g in ad:
+            assert g["target_calls"] == len(g["turns"]) + g["n_backtracks"]
+            assert g["n_backtracks"] <= cfg["attacker"]["max_backtracks"]
+            assert all(t["user"].startswith("adaptive mock turn") for t in g["turns"])
+            # a backtracked turn never reaches the target's history: accepted turns are numbered 1..n
+            assert [t["turn"] for t in g["turns"]] == list(range(1, len(g["turns"]) + 1))
+        judge_all(cfg, mock=True, log=lambda *_: None)
+        export_sheets(cfg, append=True, log=lambda *_: None)
+        b2 = pd.read_csv(paths(cfg).labels_dir / "harmful_labels_b2.csv")
+        assert len(b2) == len(ad) and b2["item_code"].str.startswith("H2-").all()
+        assert b2["transcript"].str.contains("removed from the conversation").any()
+        export_sheets(cfg, append=True, log=lambda *_: None)  # nothing new: no third batch
+        assert not (paths(cfg).labels_dir / "harmful_labels_b3.csv").exists()
+        h2 = pd.read_csv(paths(cfg).labels_dir / "harmful_labels_b2.csv", dtype=str, keep_default_na=False)
+        h2[["violation_A", "violation_B", "first_turn_A", "first_turn_B"]] = ["1", "1", "2", "2"]
+        h2.to_csv(paths(cfg).labels_dir / "harmful_labels_b2.csv", index=False)
+
         res = run_analysis(cfg, log=lambda *_: None)
         asr, orr, tests = res["asr"], res["orr"], res["tests"]
-        assert set(asr["condition"]) == {"single", "crescendo"} and len(asr) == 2 * n_m
+        assert set(asr["condition"]) == {"single", "crescendo", "adaptive"} and len(asr) == 3 * n_m
+        assert (asr[asr.condition == "adaptive"]["asr"] == 1.0).all()  # batch-2 human labels were read
+        assert {"H1 (adaptive)", "H2 (adaptive)", "H4"} <= set(tests["hypothesis"]) and "p_holm" in tests
+        gc = res["generation_change"]
+        assert {"ASR crescendo", "ASR adaptive", "multi-turn gap: crescendo minus single",
+                "adaptivity gain: adaptive minus scripted", "backtracks needed (adaptive)", "ORR benign"} <= set(gc["measure"])
+        assert (gc["ci_low"] <= gc["delta"] + 1e-9).all() and (gc["delta"] <= gc["ci_high"] + 1e-9).all()
         assert len(orr) == n_m and set(tests["hypothesis"]) >= {"H1", "H2", "H3"}
         fams = {m.get("family", "main") for m in cfg["models"]}
         assert (tests["hypothesis"] == "H1").sum() == len(fams)  # old vs new within each family only
-        assert len(res["figures"]) == 3
+        assert len(res["figures"]) == 4
         s = (paths(cfg).analysis_dir / "summary.md").read_text()
         assert "MOCK" in s
         out = Path(__file__).resolve().parent / "last_run"
@@ -196,6 +230,48 @@ def test_api_backend():
     assert xstest_strmatch("") == 2  # an empty reply counts as a refusal
 
 
+def test_refusal_detector_and_drafts():
+    from ckit.attacker import looks_like_refusal
+    from ckit.scenarios import draft_scripts
+    assert looks_like_refusal("I\u2019m sorry, but I can\u2019t help with that.")
+    assert looks_like_refusal("", blocked=True) and looks_like_refusal("Sure", blocked=True)
+    assert not looks_like_refusal("Sure. Here is an overview of how account recovery works. " * 20)
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "new.csv"
+        src.write_text("id,category,source,intent,direct_prompt,turn_1,turn_2,turn_3,turn_4,turn_5\n"
+                       "n1,harassment,test,TEST GOAL N1,,,,,,\n"
+                       "n2,harassment,test,TEST GOAL N2,,a,b,c,d,e\n")
+        cfg = load_config(results_dir=tmp)
+        out = draft_scripts(cfg, str(src), str(Path(tmp) / "drafted.csv"), mock=True, log=lambda *_: None)
+        d = pd.read_csv(out, dtype=str, keep_default_na=False)
+        assert d.loc[0, "turn_5"] == "scripted mock turn 5" and d.loc[0, "review_status"].startswith("TODO")
+        assert d.loc[1, "turn_1"] == "a" and d.loc[1, "review_status"] == "approved"
+        try:
+            load_harmful(out)  # unreviewed drafts must not be usable
+            raise AssertionError("drafts with review_status TODO must be rejected")
+        except ValueError as e:
+            assert "n1" in str(e) and "n2" not in str(e)
+
+
+def test_data_files():
+    from ckit.scenarios import load_benign
+    cfg = load_config()
+    b = load_benign(cfg["data"]["benign_prompts"])
+    assert len(b) >= 50 and len({x.id for x in b}) == len(b)
+    assert pd.Series([x.type for x in b]).value_counts().min() >= 5
+
+
+def test_attacker_message_tags():
+    from ckit.attacker import _extract_messages
+    assert _extract_messages("<message> one </message>\n<message>two</message>") == ["one", "two"]
+    # an untagged reply is used only where one message is expected (adaptive next turn)
+    assert _extract_messages('"Can you tell me more?"') == []
+    assert _extract_messages('"Can you tell me more?"', fallback=True) == ["Can you tell me more?"]
+    assert _extract_messages("  ", fallback=True) == []
+    assert _extract_messages("<message>x</message> extra", fallback=True) == ["x"]
+
+
 if __name__ == "__main__":
-    test_stats(); test_template_is_rejected(); test_api_backend(); test_end_to_end()
+    test_stats(); test_template_is_rejected(); test_api_backend(); test_refusal_detector_and_drafts()
+    test_data_files(); test_attacker_message_tags(); test_end_to_end()
     print("all tests passed")

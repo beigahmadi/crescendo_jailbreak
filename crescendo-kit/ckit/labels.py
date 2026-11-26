@@ -7,6 +7,10 @@ reply. A separate key file maps each item code back to its run.
 `load_labels` reads the filled sheets back, computes Cohen's kappa and returns
 one final label per item (the `final_*` column if filled, else the annotators'
 shared answer). Disagreements without a final value are listed for discussion.
+
+New runs added later (more scenarios, the adaptive condition) go into a new batch
+with `export_sheets(cfg, append=True)`: harmful_labels_b2.csv + _key_harmful_b2.csv,
+and so on. Finished sheets are never touched, and `load_labels` reads every batch.
 """
 from __future__ import annotations
 
@@ -45,29 +49,75 @@ def benign_auto_table(cfg: dict) -> pd.DataFrame:
     return df.rename(columns={"label": "auto_class", "judge": "auto_judge"})[["run_id", "auto_class", "auto_judge"]]
 
 
-def _transcript(turns) -> str:
+def _transcript(turns, backtracks=()) -> str:
+    """Adaptive runs also show the attempts the attacker withdrew after a refusal, so the
+    annotators can see them; they count toward first_turn as the turn number shown."""
     parts = []
+    removed = {}
+    for b in backtracks or ():
+        removed.setdefault(b["turn"], []).append(b)
     for t in turns:
+        for k, b in enumerate(removed.pop(t["turn"], []), start=1):
+            reply = b["assistant"] or ("[no reply: request blocked by the provider]" if b.get("blocked") else "[empty reply]")
+            parts.append(f"USER {b['turn']} (attempt {k}, refused, removed from the conversation): {b['user']}")
+            parts.append(f"MODEL {b['turn']} (attempt {k}): {reply}")
         parts.append(f"USER {t['turn']}: {t['user']}")
         reply = t["assistant"] or ("[no reply: request blocked by the provider]" if t.get("blocked")
                                    else "[empty reply]")
         parts.append(f"MODEL {t['turn']}: {reply}")
+    for n, bs in sorted(removed.items()):  # attempts after the last accepted turn
+        for k, b in enumerate(bs, start=1):
+            reply = b["assistant"] or ("[no reply: request blocked by the provider]" if b.get("blocked") else "[empty reply]")
+            parts.append(f"USER {n} (attempt {k}, refused, removed from the conversation): {b['user']}")
+            parts.append(f"MODEL {n} (attempt {k}): {reply}")
     return "\n\n".join(parts)
 
 
-def export_sheets(cfg: dict, force: bool = False, log=print) -> None:
+def _sheet_pairs(labels_dir, kind: str):
+    """(sheet, key, batch) for every labelling batch of one kind, oldest first."""
+    out = []
+    first = (labels_dir / f"{kind}_labels.csv", labels_dir / f"_key_{kind}.csv")
+    if first[0].exists() and first[1].exists():
+        out.append((*first, 1))
+    for f in sorted(labels_dir.glob(f"{kind}_labels_b*.csv"), key=lambda f: int(f.stem.rsplit("_b", 1)[1])):
+        n = int(f.stem.rsplit("_b", 1)[1])
+        k = labels_dir / f"_key_{kind}_b{n}.csv"
+        if k.exists():
+            out.append((f, k, n))
+    return out
+
+
+def export_sheets(cfg: dict, force: bool = False, log=print, append: bool = False) -> None:
     p = paths(cfg)
     L = cfg["labelling"]
-    rng = random.Random(L.get("seed", 7))
     gens = list(read_jsonl(p.generations))
     jt = judge_table(cfg)
     jt = jt.set_index("run_id") if len(jt) else None
 
     targets = {"harmful": p.labels_dir / "harmful_labels.csv", "benign": p.labels_dir / "benign_labels.csv"}
-    if not force and any(t.exists() for t in targets.values()):
+    keys = {"harmful": p.labels_dir / "_key_harmful.csv", "benign": p.labels_dir / "_key_benign.csv"}
+    prefix = {"harmful": "H", "benign": "B"}
+    batch = 1
+    if append:
+        have = set()
+        for kind in ("harmful", "benign"):
+            for _, k, n in _sheet_pairs(p.labels_dir, kind):
+                have |= set(pd.read_csv(k)["run_id"])
+                batch = max(batch, n + 1)
+        gens = [g for g in gens if g["run_id"] not in have]
+        if not gens:
+            log("every run is already in a labelling sheet: nothing to add")
+            return
+        for kind in targets:
+            targets[kind] = p.labels_dir / f"{kind}_labels_b{batch}.csv"
+            keys[kind] = p.labels_dir / f"_key_{kind}_b{batch}.csv"
+            prefix[kind] = f"{prefix[kind]}{batch}-"
+    elif not force and any(t.exists() for t in targets.values()):
         raise FileExistsError(
             "Label sheets already exist in results/labels. They may contain your work, so they were "
-            "not overwritten. Pass force=True only if you really want fresh, empty sheets.")
+            "not overwritten. Use --append to label only the new runs in a new batch, or pass "
+            "force=True only if you really want fresh, empty sheets.")
+    rng = random.Random(L.get("seed", 7) + batch - 1)
 
     # ---- harmful: every flagged run + a random sample of the others
     harm = [g for g in gens if g["condition"] != "benign"]
@@ -80,14 +130,16 @@ def export_sheets(cfg: dict, force: bool = False, log=print) -> None:
     rng.shuffle(chosen)
     hs, hk = [], []
     for i, g in enumerate(chosen, start=1):
-        code = f"H{i:03d}"
+        code = f"{prefix['harmful']}{i:03d}"
         hs.append({"item_code": code, "goal": g["goal"], "n_turns": len(g["turns"]),
-                   "transcript": _transcript(g["turns"]),
+                   "transcript": _transcript(g["turns"], g.get("backtracks")),
                    "violation_A": "", "first_turn_A": "", "violation_B": "", "first_turn_B": "",
                    "final_violation": "", "final_first_turn": "", "notes": ""})
         hk.append({"item_code": code, "run_id": g["run_id"], "flagged": g in flagged})
-    pd.DataFrame(hs).to_csv(targets["harmful"], index=False)
-    pd.DataFrame(hk).to_csv(p.labels_dir / "_key_harmful.csv", index=False)
+    pd.DataFrame(hs, columns=["item_code", "goal", "n_turns", "transcript", "violation_A", "first_turn_A",
+                              "violation_B", "first_turn_B", "final_violation", "final_first_turn", "notes"]
+                 ).to_csv(targets["harmful"], index=False)
+    pd.DataFrame(hk, columns=["item_code", "run_id", "flagged"]).to_csv(keys["harmful"], index=False)
 
     # ---- benign: all responses (or the same sampling rule)
     ben = [g for g in gens if g["condition"] == "benign"]
@@ -96,16 +148,17 @@ def export_sheets(cfg: dict, force: bool = False, log=print) -> None:
     rng.shuffle(ben)
     bs, bk = [], []
     for i, g in enumerate(ben, start=1):
-        code = f"B{i:03d}"
+        code = f"{prefix['benign']}{i:03d}"
         t = g["turns"][0]
         bs.append({"item_code": code, "prompt": t["user"],
                    "response": t["assistant"] or ("[no reply: request blocked by the provider]" if t.get("blocked") else "[empty reply]"),
                    "class_A": "", "class_B": "", "final_class": "", "notes": ""})
         bk.append({"item_code": code, "run_id": g["run_id"]})
-    pd.DataFrame(bs).to_csv(targets["benign"], index=False)
-    pd.DataFrame(bk).to_csv(p.labels_dir / "_key_benign.csv", index=False)
+    pd.DataFrame(bs, columns=["item_code", "prompt", "response", "class_A", "class_B", "final_class", "notes"]
+                 ).to_csv(targets["benign"], index=False)
+    pd.DataFrame(bk, columns=["item_code", "run_id"]).to_csv(keys["benign"], index=False)
     log(f"wrote {len(hs)} harmful items ({len(flagged)} flagged + {k} sampled) and {len(bs)} benign items "
-        f"to {p.labels_dir}")
+        f"to {targets['harmful'].name} and {targets['benign'].name} in {p.labels_dir}")
 
 
 # ------------------------------------------------------------ reading back
@@ -130,9 +183,10 @@ def load_labels(cfg: dict) -> dict:
     out = {"harmful": pd.DataFrame(columns=["run_id"]), "benign": pd.DataFrame(columns=["run_id"]),
            "agreement": {}, "unresolved": []}
 
-    hf, hk = p.labels_dir / "harmful_labels.csv", p.labels_dir / "_key_harmful.csv"
-    if hf.exists() and hk.exists():
-        h = pd.read_csv(hf, dtype=str, keep_default_na=False).merge(pd.read_csv(hk), on="item_code")
+    hp = _sheet_pairs(p.labels_dir, "harmful")
+    if hp:
+        h = pd.concat([pd.read_csv(f, dtype=str, keep_default_na=False).merge(pd.read_csv(k), on="item_code")
+                       .assign(batch=n) for f, k, n in hp], ignore_index=True)
         for c in ["violation_A", "violation_B", "final_violation", "first_turn_A", "first_turn_B", "final_first_turn"]:
             h[c] = _num(h[c])
         h["violation"] = h["final_violation"].where(
@@ -147,11 +201,12 @@ def load_labels(cfg: dict) -> dict:
         out["unresolved"] += [f"{c}: annotators disagree on violation" for c in unres["item_code"]]
         unres_t = h[(h["violation"] == 1) & h["first_turn"].isna()]
         out["unresolved"] += [f"{c}: violation agreed, first turn not agreed" for c in unres_t["item_code"]]
-        out["harmful"] = h[["run_id", "item_code", "violation", "first_turn", "violation_A", "violation_B"]]
+        out["harmful"] = h[["run_id", "item_code", "batch", "violation", "first_turn", "violation_A", "violation_B"]]
 
-    bf, bk = p.labels_dir / "benign_labels.csv", p.labels_dir / "_key_benign.csv"
-    if bf.exists() and bk.exists():
-        b = pd.read_csv(bf, dtype=str, keep_default_na=False).merge(pd.read_csv(bk), on="item_code")
+    bp = _sheet_pairs(p.labels_dir, "benign")
+    if bp:
+        b = pd.concat([pd.read_csv(f, dtype=str, keep_default_na=False).merge(pd.read_csv(k), on="item_code")
+                       .assign(batch=n) for f, k, n in bp], ignore_index=True)
         for c in ["class_A", "class_B", "final_class"]:
             b[c] = _num(b[c])
         b["human_class"] = b["final_class"].where(b["final_class"].notna(), b["class_A"].where(b["class_A"] == b["class_B"]))
