@@ -1,4 +1,4 @@
-"""Load and check the scenario files."""
+"""Loads and checks the scenario files."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

@@ -44,7 +44,7 @@ def load_config(path: str | os.PathLike | None = None, results_dir: str | None =
         cfg = yaml.safe_load(f)
     if results_dir:
         cfg["results_dir"] = results_dir
-    # resolve relative data paths against the kit folder
+    # resolves relative data paths against the kit folder
     for k, v in cfg.get("data", {}).items():
         if v and not os.path.isabs(v):
             cfg["data"][k] = str(KIT_ROOT / v)

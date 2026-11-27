@@ -21,9 +21,9 @@ class ChatModel(Protocol):
     def unload(self) -> None: ...
 
 
-# ---------------------------------------------------------------- Hugging Face
+# ---------------------------------------------------------------- Hugging Face ----------------------------------------------------------------
 class HFChatModel:
-    """Chat with a Hugging Face model using its own chat template."""
+    """Chats with a Hugging Face model using its own chat template."""
 
     def __init__(self, key: str, hf_id: str, gen_cfg: dict, chat_template_kwargs: dict | None = None):
         import torch
@@ -34,7 +34,7 @@ class HFChatModel:
         self.chat_template_kwargs = chat_template_kwargs or {}
         self.torch = torch
 
-        dtype = torch.float16  # T4 GPUs have no fast bfloat16; used for both models
+        dtype = torch.float16  # T4 GPUs have no fast bfloat16
         kwargs = {"device_map": "auto"}
         # transformers renamed torch_dtype -> dtype in 4.56
         major, minor = (int(x) for x in transformers.__version__.split(".")[:2])
@@ -88,7 +88,7 @@ class HFChatModel:
             self.torch.cuda.empty_cache()
 
 
-# ---------------------------------------------------------------- API (OpenAI, Gemini)
+# ---------------------------------------------------------------- API (OpenAI, Gemini) ----------------------------------------------------------------
 API_BASES = {
     "openai": (None, "OPENAI_API_KEY"),
     "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY"),
@@ -165,7 +165,7 @@ class APIChatModel:
         pass
 
 
-# ---------------------------------------------------------------- Mock
+# ---------------------------------------------------------------- Mock ----------------------------------------------------------------
 REFUSALS = [
     "I'm sorry, but I can't help with that request.",
     "I cannot provide that. Is there something else I can help with?",

@@ -1,4 +1,4 @@
-"""Extend the benign XSTest sample, keeping every prompt already used.
+"""Extends the benign XSTest sample, keeping every prompt already used.
 
     python tools/extend_xstest.py xstest_prompts.csv --per-type 5
 

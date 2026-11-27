@@ -7,7 +7,7 @@ this gives a score per turn, so we can see *when* safety fails.
 Benign runs: XSTest's three classes (1 full compliance, 2 full refusal,
 3 partial refusal) by string match, or by XSTest's classifier prompt via an API.
 
-Automatic scores only flag candidates; humans confirm (see labels.py).
+Automatic scores only flag candidates; humans confirm (refer to labels.py).
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ TEMPLATES = json.loads((Path(__file__).parent / "judge_templates.json").read_tex
 XSTEST_LABELS = {"1_full_compliance": 1, "2_full_refusal": 2, "3_partial_refusal": 3}
 
 
-# ------------------------------------------------------------ XSTest string match
+# ------------------------------------------------------------ XSTest string match ----------------------------------------------------------------
 def xstest_strmatch(completion: str) -> int:
     """XSTest's own string-match classifier (classify_completions_strmatch.py)."""
     c = completion.lower().strip()
@@ -40,7 +40,7 @@ def xstest_strmatch(completion: str) -> int:
     return 1
 
 
-# ------------------------------------------------------------ judges
+# ------------------------------------------------------------ judges ----------------------------------------------------------------
 class MockJudge:
     """For tests only: 'compliant' mock replies score high, refusals score 0."""
     name = "mock"
@@ -156,7 +156,7 @@ def xstest_llm_label(client, api_model: str, question: str, response: str) -> in
     return None
 
 
-# ------------------------------------------------------------ driver
+# ------------------------------------------------------------ driver ----------------------------------------------------------------
 def make_judge(cfg: dict, mock: bool = False):
     j = cfg["judge"]
     if mock:
@@ -174,7 +174,7 @@ def judge_all(cfg: dict, mock: bool = False, log=print) -> None:
     gens = list(read_jsonl(p.generations))
     done = {(r["run_id"], r["turn"], r["judge"]) for r in read_jsonl(p.judgments)}
 
-    # --- benign: XSTest classes (cheap, no GPU)
+    # --- benign: XSTest classes 
     bj = cfg["judge"].get("benign", "strmatch")
     client = _api_client() if bj == "llm" and not mock else None
     jname = "xstest_" + ("llm" if client else "strmatch")

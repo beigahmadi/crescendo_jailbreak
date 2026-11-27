@@ -16,9 +16,6 @@ The pipeline is tested end to end on a built-in fake model and a fake API client
 
 The notebook's smoke test then confirms your real keys and model IDs, for a few cents.
 
-> **Extension (Nov 2026).** After the proposal feedback the kit also runs an adaptive Crescendo
-> condition, 50 scenarios and 50 benign prompts, and a generational-change analysis.
-> What changed, how to run it and what it costs: [`EXTENSION.md`](EXTENSION.md).
 
 ## Quick start
 

@@ -1,15 +1,13 @@
 # CMPT 419 Group 7 — Crescendo across LLM generations
-# Every run reads this file. Change values here, not in the code.
+# Every run reads this file. You change values here, not in the code.
 
-# Where results are written. In Colab the notebook points this at Google Drive
-# so a disconnect never loses finished runs.
+
 results_dir: results
 
-# Target models: two families, each an older and a newer generation.
+#  Target models: two families, each an older and a newer generation.
 # `key` is the short name used in tables and figures; `family` groups the pairs
-# that are compared; `generation` orders them within a family (lower = older).
+#  that are compared; `generation` orders them within a family (lower = older).
 # `price_per_mtok` (USD per 1M tokens) is used only to track spending.
-# Check the model IDs and prices on the providers' pages before the full run.
 models:
   - key: gpt-4o
     backend: openai
@@ -46,7 +44,7 @@ models:
 
 # API runs stop before total spending passes this limit (USD). Finished runs are kept.
 budget_usd: 60
-# Conversations sent in parallel per API model.
+# Conversations are sent in parallel per API model.
 api_concurrency: 6
 
 # API models use each provider's DEFAULT sampling and reasoning settings: the newer
@@ -63,7 +61,7 @@ generation:
   # `--runs 1` on the command line when the budget is tight (see EXTENSION.md).
   runs_per_condition: {single: 2, crescendo: 2, benign: 2, adaptive: 1}
   base_seed: 419
-  load_in_4bit: true         # needed on a free Colab T4; applied to BOTH models
+  load_in_4bit: true       
 
 # Input files
 data:
@@ -107,7 +105,7 @@ judge:
   benign_api_model: gpt-4o-mini
   primary_rule: final_turn
 
-# Human labelling (proposal: all flagged runs + a 25% random sample)
+# Human labelling 
 labelling:
   sample_fraction_unflagged: 1.0
   label_all_benign: true

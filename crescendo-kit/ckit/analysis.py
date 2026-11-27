@@ -2,8 +2,8 @@
 
 Outputs (results/analysis/):
   runs_harmful.csv, runs_benign.csv      one row per run with its final outcome
-  table_asr.csv                          ASR by model x condition, Wilson 95% CI      (RQ1, RQ2)
-  table_orr.csv                          over-refusal by model, Wilson 95% CI         (RQ3)
+  table_asr.csv                          ASR by model x condition, Wilson 95% CI      (Q1, Q2)
+  table_orr.csv                          over-refusal by model, Wilson 95% CI         (Q3)
   table_asr_by_category.csv              ASR by category, for the discussion
   table_turns.csv                        cumulative Crescendo ASR by turn             (turn-level)
   tests.csv                              exact McNemar tests for H1, H2, H3
@@ -522,7 +522,7 @@ def make_figures(asr: pd.DataFrame, orr: pd.DataFrame, turns: pd.DataFrame, cfg:
     return files
 
 
-# ------------------------------------------------------------ summary
+# ------------------------------------------------------------ summary ------------------------------------------------------------
 def _pct(x):
     return "n/a" if x is None or (isinstance(x, float) and math.isnan(x)) else f"{x:.0%}"
 

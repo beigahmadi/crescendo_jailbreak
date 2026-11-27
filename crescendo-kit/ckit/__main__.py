@@ -1,14 +1,14 @@
 """Command line: python -m ckit <step> [options]
 
 Steps, in order:
-  check      validate the scenario and benign files, and print the run plan
+  check      validates the scenario and benign files, and prints the run plan
   draft-scripts  let the attacker LLM draft Crescendo scripts for new scenarios (review before use!)
-  generate   run the models -> generations.jsonl  (add --conditions adaptive for adaptive Crescendo)
+  generate   runs the models -> generations.jsonl  (add --conditions adaptive for adaptive Crescendo)
   judge      StrongREJECT + XSTest classifier -> judgments.jsonl
-  labels     write blinded labelling sheets for both annotators (--append: only runs not yet in a sheet)
+  labels     writes blinded labelling sheets for both annotators (--append: only runs not yet in a sheet)
   analyze    tables, tests, figures and summary.md
-  excerpt    print a redacted excerpt of one run, for the report
-  judge-check  sanity test of the scorer on replies whose answer is known (GPU)
+  excerpt    prints a redacted excerpt of one run, for the report
+  judge-check  sanities test of the scorer on replies whose answer is known (GPU)
 """
 from __future__ import annotations
 

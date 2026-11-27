@@ -1,9 +1,9 @@
-"""Run every model on every condition and save each conversation.
+"""Runs every model on every condition and saves each conversation.
 
 Each finished run is appended to generations.jsonl at once, so a disconnect
 loses at most the runs in progress: start again and finished runs are skipped.
 API models run several conversations in parallel and stop before the spending
-limit in config.yaml (`budget_usd`) is passed.
+limit in config.yaml budget_usd is passed.
 
 Conditions: `single` (direct request), `crescendo` (fixed script from the scenario
 file), `adaptive` (an attacker LLM writes each turn and backtracks on refusals; see
@@ -173,7 +173,7 @@ def run_all(cfg: dict, mock: bool = False, model_keys=None, conditions=CONDITION
                         break
                     finished, running = wait(running, return_when=FIRST_COMPLETED)
                     for f in finished:
-                        f.result()  # re-raise errors (bad key, wrong model id, ...)
+                        f.result()  # re-raises errors (bad key, wrong model id, ...)
         finally:
             model.unload()
     if attacker is not None:

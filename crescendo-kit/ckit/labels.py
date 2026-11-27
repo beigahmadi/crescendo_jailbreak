@@ -8,8 +8,8 @@ reply. A separate key file maps each item code back to its run.
 one final label per item (the `final_*` column if filled, else the annotators'
 shared answer). Disagreements without a final value are listed for discussion.
 
-New runs added later (more scenarios, the adaptive condition) go into a new batch
-with `export_sheets(cfg, append=True)`: harmful_labels_b2.csv + _key_harmful_b2.csv,
+New runs added later based on the feedback recived from the instructor(more scenarios, the adaptive condition) 
+go into a new batch with `export_sheets(cfg, append=True)`: harmful_labels_b2.csv + _key_harmful_b2.csv,
 and so on. Finished sheets are never touched, and `load_labels` reads every batch.
 """
 from __future__ import annotations
@@ -50,8 +50,6 @@ def benign_auto_table(cfg: dict) -> pd.DataFrame:
 
 
 def _transcript(turns, backtracks=()) -> str:
-    """Adaptive runs also show the attempts the attacker withdrew after a refusal, so the
-    annotators can see them; they count toward first_turn as the turn number shown."""
     parts = []
     removed = {}
     for b in backtracks or ():
@@ -161,7 +159,7 @@ def export_sheets(cfg: dict, force: bool = False, log=print, append: bool = Fals
         f"to {targets['harmful'].name} and {targets['benign'].name} in {p.labels_dir}")
 
 
-# ------------------------------------------------------------ reading back
+# ------------------------------------------------------------ reading back ----------------------------------------------------------------
 def cohen_kappa(a, b) -> float:
     pairs = [(x, y) for x, y in zip(a, b) if pd.notna(x) and pd.notna(y)]
     if not pairs:
